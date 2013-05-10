@@ -106,6 +106,8 @@ static uint8_t g_decrypted_one;
 #define PACKET_STATISTICS_READER 15
 #define AGGREGATION_TIMEOUT(strength) ((uint32_t)(MIN_AGGREGATION_SECONDS+(((MAX_AGGREGATION_SECONDS-MIN_AGGREGATION_SECONDS)/(STRENGTH_LEVELS_COUNT-1))*(strength))))
 
+static int parse_packet (double timestamp, uint32_t reader_id, const void *data, int len, bool decrypt);
+
 typedef struct
 {
 	double time;
@@ -664,6 +666,29 @@ prox_tag_sighting (double timestamp, uint32_t tag1, uint32_t tag2,
 	pthread_mutex_unlock (item_mutex);
 }
 
+static bool
+process_location_tag(uint32_t timestamp, uint16_t tag_id,uint16_t prox_tag_id,uint16_t prox_tag_count,uint16_t prox_tag_strength)
+{
+	TBeaconWrapper vp;
+	int t;
+
+	if(!prox_tag_count)
+		return false;
+
+	for (t = 0; t < (int)READER_COUNT; t++)
+		if (g_ReaderList[t].id == prox_tag_id)
+		{
+			memset(&vp,0,sizeof(vp));
+			vp.proto = RFBPROTO_BEACONTRACKER;
+			vp.oid = ntohs(tag_id);
+			vp.p.tracker.strength = prox_tag_strength;
+			while(prox_tag_count--)
+				parse_packet(timestamp, prox_tag_id, &vp, sizeof(vp), false);
+			return true;
+		}
+	return false;
+}
+
 static int
 parse_packet (double timestamp, uint32_t reader_id, const void *data, int len,
 			  bool decrypt)
@@ -868,8 +893,10 @@ parse_packet (double timestamp, uint32_t reader_id, const void *data, int len,
 							 (PROX_TAG_ID_BITS +
 							  PROX_TAG_COUNT_BITS)) & PROX_TAG_STRENGTH_MASK;
 						/* add proximity tag sightings to table */
-						prox_tag_sighting (timestamp, tag_id, prox_tag_id,
-										   prox_tag_strength, prox_tag_count);
+						if(!process_location_tag(timestamp, (uint16_t)tag_id,
+											   prox_tag_id, prox_tag_count, prox_tag_strength))
+							prox_tag_sighting (timestamp, tag_id, prox_tag_id,
+											   prox_tag_strength, prox_tag_count);
 					}
 				}
 			}
@@ -937,6 +964,7 @@ parse_packet (double timestamp, uint32_t reader_id, const void *data, int len,
 			{
 				item->reader = NULL;
 				item->reader_index = -1;
+				fprintf (stderr, "WARNING: unknown reader id %u seen for tag %u\n",reader_id,tag_id);
 			}
 
 			item->reader_id = reader_id;
